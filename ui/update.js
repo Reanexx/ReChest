@@ -9,6 +9,17 @@
     'Update now': 'Şimdi güncelle', 'Later': 'Sonra', 'Downloading…': 'İndiriliyor…', 'Starting the installer…': 'Kurulum başlatılıyor…',
     'Download failed. Check your connection and try again.': 'İndirme başarısız. Bağlantını kontrol edip tekrar dene.',
     'Try again': 'Tekrar dene', 'No notes for this release.': 'Bu sürüm için not yok.',
+    'Updates': 'Güncellemeler', 'ReChest looks for a new version every 2 hours': 'ReChest 2 saatte bir yeni sürüm arar',
+    'Check for updates': 'Güncellemeleri denetle', 'Checking…': 'Denetleniyor…', "You're up to date": 'Güncelsin',
+    'Update found': 'Güncelleme bulundu', "Couldn't check": 'Denetlenemedi',
+  });
+  // Settings > About: "Check for updates"
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('#updCheck');
+    if (!b || b.disabled) return;
+    b.disabled = true;
+    b.textContent = T('Checking…');
+    window.chrome.webview.postMessage({ type: 'updateCheck' });
   });
   const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
   // the little Markdown GitHub release notes use: headings, bullets, **bold**, `code`
@@ -62,7 +73,15 @@
   }
   function close() { const e = el; el = null; e?.classList.remove('on'); setTimeout(() => e?.remove(), 220); }
 
+  let last = null; // the newest update the app told us about, with the installed version
   window.ReUpdate = {
+    checked(result) { // 'new' | 'none' | 'error'
+      const b = document.getElementById('updCheck');
+      if (result === 'new' && last) { later(''); shown = null; show(last.u, last.v); } // asked for it: show it even after "Later"
+      if (!b) return;
+      b.textContent = T(result === 'new' ? 'Update found' : result === 'none' ? "You're up to date" : "Couldn't check");
+      setTimeout(() => { b.disabled = false; b.textContent = T('Check for updates'); }, 4000);
+    },
     progress(p) {
       if (!el) return;
       el.querySelector('.upd-bar i').style.width = p + '%';
@@ -78,5 +97,9 @@
     },
   };
   const T = (s) => (window.T ? window.T(s) : s);
-  window.chrome.webview.addEventListener('message', (e) => { if (e.data?.update) show(e.data.update, e.data.version); });
+  window.chrome.webview.addEventListener('message', (e) => {
+    if (!e.data?.update) return;
+    last = { u: e.data.update, v: e.data.version };
+    show(last.u, last.v);
+  });
 })();

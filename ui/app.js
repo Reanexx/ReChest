@@ -806,6 +806,7 @@ function settings() {
     about: () => `<section class="panel rise">${panelHead('About')}
       <div class="about"><span class="logo-lg"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="7.5" r="4.2"/><path d="M10.5 10.5 20 20"/><path d="M15.5 15.5l2.6-2.6"/><path d="M18.5 18.5l2.6-2.6"/></svg></span>
         <span><b>ReChest ${esc(D.version)}</b><small>Chest analytics from your Fortnite replays. Chest pictures: Fortnite Wiki. Skins: fortnite-api.com. Not affiliated with Epic Games.</small></span></div>
+      ${row('Updates', 'ReChest looks for a new version every 2 hours', '<button class="btn sm" id="updCheck">Check for updates</button>')}
       ${row('', '<span>Made with <span class="heart">❤</span> by Reanex</span>', '')}
     </section>`,
   };

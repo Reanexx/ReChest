@@ -9,7 +9,7 @@
     <Nullable>disable</Nullable>
     <AssemblyName>ChestCounter</AssemblyName>
     <RootNamespace>ChestCounter</RootNamespace>
-    <Version>2.0.1</Version>
+    <Version>2.0.2</Version>
     <ApplicationIcon>app.ico</ApplicationIcon>
   </PropertyGroup>
 

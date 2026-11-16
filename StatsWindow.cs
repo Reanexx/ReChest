@@ -191,6 +191,10 @@ public sealed class StatsWindow : Window
         switch (msg.GetProperty("type").GetString())
         {
             case "ready": Push(); break;
+            case "updateCheck": // Settings > About: look now; ui/update.js shows the answer (a newer one also opens the prompt)
+                _ = Updater.Check().ContinueWith(t => Dispatcher.BeginInvoke(() =>
+                    web.CoreWebView2?.ExecuteScriptAsync($"ReUpdate.checked({(t.Result is { } f ? f ? "'new'" : "'none'" : "'error'")})")));
+                break;
             case "updateNow": // download the installer with progress, run it, quit (it starts the new version); ui/update.js shows it
                 _ = Updater.Install(p => Dispatcher.BeginInvoke(() => web.CoreWebView2?.ExecuteScriptAsync($"ReUpdate.progress({p})")))
                     .ContinueWith(t => Dispatcher.BeginInvoke(() =>

@@ -93,7 +93,7 @@ public partial class App : Application
         stats.MapChanged += () => full?.Send();
         var minimap = new MinimapTracker { Active = () => settings.MapTrack && tracker.LiveSince != null, Quality = () => settings.TrackQuality };
         var pointer = new ChestPointer(() => settings, () => tracker.LiveSince != null);
-        minimap.Found += (x, y, h, _) => Dispatcher.BeginInvoke(() => { stats.SetPos(x, y, h); route.SetPos(x, y, h); full?.SetPos(x, y, h); pointer.SetPos(x, y, h); });
+        minimap.Found += (x, y, h, _) => Dispatcher.BeginInvoke(() => { RouteBuilder.Seen(x, y, tracker.LiveSince); stats.SetPos(x, y, h); route.SetPos(x, y, h); full?.SetPos(x, y, h); pointer.SetPos(x, y, h); });
         minimap.Turned += h => Dispatcher.BeginInvoke(() => { stats.SetHeading(h); route.SetHeading(h); full?.SetHeading(h); pointer.SetHeading(h); });
         void MapKey(Action change)
         {
@@ -116,7 +116,7 @@ public partial class App : Application
         });
         input.RouteHere += () => Dispatcher.BeginInvoke(() => // a new route from where you stand; the old one goes to Saved routes
         {
-            if (route.Me is not var (mx, my) || RouteBuilder.FromHere(mx, my, settings) is not { } r) return; // no position or no chest spots yet
+            if (route.MeAll is not var (mx, my, mh) || RouteBuilder.FromHere(mx, my, mh, settings) is not { } r) return; // no position or no chest spots yet; leans the way you face, skips what you looted
             route.SetRoute(r.Img, r.StopsImg, r.Stats);
             stats.SetNewRoute(r.World);
             if (!settings.RouteOverlay) MapKey(() => settings.RouteOverlay = true);

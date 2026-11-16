@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
 using System.Reflection;
@@ -6,7 +6,7 @@ using System.Text.Json;
 
 namespace ChestCounter;
 
-/// Updates through GitHub Releases: an anonymous look at the latest release at start and every 6 hours
+/// Updates through GitHub Releases: an anonymous look at the latest release at start and every 2 hours (or from Settings > About)
 /// (one small request, silent when offline), and on "Update now" the release's installer is downloaded and run
 /// in update mode (it waits for this app to close, installs over it and starts it again).
 public static class Updater
@@ -27,17 +27,18 @@ public static class Updater
     public static void Start()
     {
         http.DefaultRequestHeaders.UserAgent.ParseAdd($"ReChest/{Version}"); // GitHub's API refuses requests without one
-        timer = new Timer(_ => _ = Check(), null, TimeSpan.FromSeconds(15), TimeSpan.FromHours(6));
+        timer = new Timer(_ => _ = Check(), null, TimeSpan.FromSeconds(15), TimeSpan.FromHours(2));
     }
 
-    static async Task Check()
+    /// True: a newer release (Latest, Found raised); false: up to date; null: couldn't ask (offline, rate-limited).
+    public static async Task<bool?> Check()
     {
         try
         {
             using var doc = JsonDocument.Parse(await http.GetStringAsync($"https://api.github.com/repos/{Repo}/releases/latest"));
             var r = doc.RootElement;
             var tag = r.GetProperty("tag_name").GetString() ?? "";
-            if (!IsNewer(tag, Version)) return;
+            if (!IsNewer(tag, Version)) return false;
             foreach (var a in r.GetProperty("assets").EnumerateArray())
             {
                 var name = a.GetProperty("name").GetString() ?? "";
@@ -45,10 +46,11 @@ public static class Updater
                 Latest = new(tag.TrimStart('v', 'V'), r.GetProperty("name").GetString() ?? tag, r.GetProperty("body").GetString() ?? "",
                     a.GetProperty("browser_download_url").GetString(), a.GetProperty("size").GetInt64());
                 Found?.Invoke();
-                return;
+                return true;
             }
+            return false; // newer, but no installer attached yet
         }
-        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException or KeyNotFoundException or InvalidOperationException) { } // offline, rate-limited or no release yet
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException or KeyNotFoundException or InvalidOperationException) { return null; } // offline, rate-limited or no release yet
     }
 
     public static bool IsNewer(string tag, string current) =>

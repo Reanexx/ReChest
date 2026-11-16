@@ -110,27 +110,65 @@
   const saveRoute = () => store('rechest.route', S.route);
   const eta = (m, chests) => { const t = Math.round(m / RUN + chests * OPEN); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
 
-  /** Auto route: from the landing spot take the nearest unvisited chest n times (nearest neighbour), then untangle
-      the order with 2-opt on the open path (start fixed). Straight-line distance; terrain and buildings are ignored. */
+  /** Auto route: n chests from the landing spot in the least walking. Same method as RouteBuilder.Auto (the in-game
+      "route from here"): many randomised greedy routes (the first one plain) leaning into chest clusters, each polished
+      by 2-opt, moving single stops and swapping stops for unused chests nearby; the shortest wins.
+      Straight-line distance; terrain and buildings are ignored. */
   function autoRoute(start, items, n) {
-    const left = items.slice(), pts = [start];
-    while (pts.length <= n && left.length) {
-      const at = pts[pts.length - 1];
-      let bi = 0, bd = Infinity;
-      left.forEach((c, i) => { const d = Math.hypot(c.x - at.x, c.y - at.y); if (d < bd) { bd = d; bi = i; } });
-      pts.push(left.splice(bi, 1)[0]);
-    }
     const D = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-    for (let better = true; better;) {
-      better = false;
-      for (let i = 1; i < pts.length - 1; i++) {
-        for (let k = i + 1; k < pts.length; k++) {
-          const a = pts[i - 1], b = pts[i], c = pts[k], d = pts[k + 1];
-          if (D(a, c) + (d ? D(b, d) : 0) < D(a, b) + (d ? D(c, d) : 0) - 1) { pts.splice(i, k - i + 1, ...pts.slice(i, k + 1).reverse()); better = true; }
-        }
+    n = Math.min(n, items.length);
+    if (n <= 0) return [{ x: start.x, y: start.y }];
+    const pool = items.slice().sort((a, b) => D(start, a) - D(start, b)).slice(0, Math.max(5 * n, 60));
+    const dense = pool.map((c) => pool.filter((o) => D(c, o) < 4000).length);
+    let seed = 1;
+    const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647); // seeded: same spot, same route
+    const len = (r) => { let s = 0; for (let i = 1; i < r.length; i++) s += D(r[i - 1], r[i]); return s; };
+    const greedy = (random) => {
+      const used = new Array(pool.length).fill(false), r = [start];
+      while (r.length <= n) {
+        const at = r[r.length - 1], best = [];
+        pool.forEach((c, i) => { if (!used[i]) best.push([D(at, c) / (1 + 0.15 * (dense[i] - 1)), i]); });
+        if (!best.length) break;
+        best.sort((a, b) => a[0] - b[0]);
+        const u = random ? rnd() : 0, pick = best[u < 0.6 || best.length < 2 ? 0 : u < 0.85 || best.length < 3 ? 1 : 2][1];
+        used[pick] = true;
+        r.push(pool[pick]);
       }
+      return r;
+    };
+    const polish = (r) => {
+      let cost = len(r);
+      const tryIt = (change, undo) => { change(); const c = len(r); if (c < cost - 1) { cost = c; return true; } undo(); return false; };
+      const W = 40;
+      for (let round = 0; round < 50; round++) {
+        let better = false;
+        for (let i = 1; i < r.length - 1; i++) for (let k = i + 1; k < Math.min(r.length, i + W); k++) {
+          const rev = () => r.splice(i, k - i + 1, ...r.slice(i, k + 1).reverse());
+          better = tryIt(rev, rev) || better;
+        }
+        for (let i = 1; i < r.length; i++) for (let j = Math.max(1, i - W); j < Math.min(r.length, i + W); j++) {
+          if (j === i) continue;
+          const p = r[i];
+          better = tryIt(() => { r.splice(i, 1); r.splice(j, 0, p); }, () => { r.splice(j, 1); r.splice(i, 0, p); }) || better;
+        }
+        const inRoute = new Set(r);
+        for (let i = 1; i < r.length; i++) {
+          const old = r[i];
+          for (const c of pool.filter((x) => !inRoute.has(x)).sort((a, b) => D(a, old) - D(b, old)).slice(0, 8)) {
+            if (tryIt(() => { r[i] = c; }, () => { r[i] = old; })) { inRoute.delete(old); inRoute.add(c); better = true; break; }
+          }
+        }
+        if (!better) break;
+      }
+      return r;
+    };
+    const tries = Math.max(n > 100 ? 1 : 6, Math.min(120, Math.floor(3000 / (Math.floor(n * n / 4) + 10))));
+    let bestR = null, bestLen = Infinity;
+    for (let t = 0; t < tries; t++) {
+      const r = polish(greedy(t > 0)), l = len(r);
+      if (l < bestLen) { bestR = r; bestLen = l; }
     }
-    return pts.map((p) => ({ x: p.x, y: p.y }));
+    return bestR.map((p) => ({ x: p.x, y: p.y }));
   }
   function buildAuto() {
     if (!S.land) return;
