@@ -1,0 +1,177 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; object-fit: contain; }
+  video { position: fixed; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+</style>
+<video id="v" playsinline></video>
+<canvas id="c"></canvas>
+<script>
+const post = m => chrome.webview.postMessage(m);
+const v = document.getElementById('v'), c = document.getElementById('c');
+const gl = c.getContext('webgl2', { alpha: true, premultipliedAlpha: true });
+const floatRT = !!gl.getExtension('EXT_color_buffer_float'); // half-float pyramid if available, 8-bit otherwise
+const MODES = ['green', 'black', 'none'];
+let mode = 'green';
+const keys = { green: [0, 1, 0], black: [0, 0, 0], none: [0, 0, 0] }; // replaced by colours measured from the video
+
+// Green keying, all on the GPU, two passes per frame:
+// 1. hue pass: mark pixels deep inside the subject (pixel and a 2px ring clearly not screen); for the bright ones store
+//    rho = G / max(R, B) of the true foreground colour; mipmap both into a pyramid.
+// 2. key pass, solving C = a*F + (1-a)*K per pixel:
+//    - near the subject: F.g = rho * max(F.r, F.b), rho from the finest pyramid level with data (pull-push fill).
+//      Classic keyers assume rho = 1, which overestimates alpha on gold/orange edges and leaves green behind.
+//    - away from it (glows, light rays): alpha is bounded by max(R,B) below (F can't exceed 1) and by the classic
+//      rho = 1 alpha above; true glows sit near the low end.
+//    Then unmix (remove the screen's share) and despill to the estimated hue.
+// Tuned against ground truth: the test video holds the same animation on green and on black 10 s apart, which gives
+// the exact matte. Edge/translucent pixels vs the old single-pass keyer: alpha error 0.058 -> 0.033,
+// colour error 9.2 -> 5.9 (of 255), leftover green 6.6 -> 2.5.
+// Black: unmultiply against the measured black point - brightness is the alpha, so glow/fire/smoke stay soft.
+const vs = `#version 300 es
+in vec2 p; out vec2 uv;
+void main() { uv = vec2(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5); gl_Position = vec4(p, 0.0, 1.0); }`;
+
+const hueFs = `#version 300 es
+precision highp float;
+uniform sampler2D t; uniform vec3 key; uniform vec2 px; in vec2 uv; out vec4 o;
+float screenAmt(vec2 q) { vec3 c = texture(t, q).rgb; return (c.g - max(c.r, c.b)) / max(key.g - max(key.r, key.b), 0.05); }
+void main() {
+  vec3 c = texture(t, uv).rgb;
+  float m = max(c.r, c.b), solid = step(screenAmt(uv), 0.02);
+  for (int i = 0; i < 8; i++) { float an = float(i) * 0.7853982; solid *= step(screenAmt(uv + 2.0 * px * vec2(cos(an), sin(an))), 0.02); }
+  float w = solid * step(0.08, m); // dark pixels carry no reliable hue
+  o = vec4(w * clamp(c.g / max(m, 0.001), 0.0, 1.0), w, solid, 1.0); // z: subject mask, dark parts included
+}`;
+
+const fs = `#version 300 es
+precision highp float;
+uniform sampler2D t, hue; uniform float mode, levels; uniform vec3 key; in vec2 uv; out vec4 o;
+void main() {
+  vec3 c = texture(t, uv).rgb;
+  if (mode < 0.5) {
+    vec2 hv = vec2(uv.x, 1.0 - uv.y); // the hue pass rendered upside down relative to the video texture
+    float rho = 1.0;                  // no subject colour anywhere: fall back to the classic assumption
+    for (float l = levels; l >= 0.0; l -= 1.0) { vec2 q = textureLod(hue, hv, l).xy; if (q.y > 0.01) rho = q.x / q.y; }
+    float m = max(c.r, c.b);
+    float near = clamp(textureLod(hue, hv, 1.0).z * 4.0, 0.0, 1.0); // share of subject pixels around this one
+    float aSubject = 1.0 - (c.g - rho * m) / max(key.g - rho * max(key.r, key.b), 0.05);
+    float aClassic = 1.0 - (c.g - m) / max(key.g - max(key.r, key.b), 0.05);
+    float lo = min(m, aClassic);
+    float aGlow = lo + 0.2 * (aClassic - lo);
+    float a = clamp(mix(aGlow, aSubject, near), 0.0, 1.0);
+    vec3 f = clamp(c - (1.0 - a) * key, 0.0, 1.0); // unmix: remove the screen's share of the pixel
+    f.g = min(f.g, rho * max(f.r, f.b));           // despill to the subject's own hue, not just "green <= red"
+    o = vec4(min(f, vec3(a)), a);
+  } else if (mode < 1.5) {
+    vec3 f = max(c - key - 0.012, 0.0) / (1.0 - key - 0.012); // black point + compression noise floor
+    float m = max(f.r, max(f.g, f.b));
+    // dim pixels stay pure unmult (glow, smoke: exact additive look); mid/bright pixels ramp to solid ("clip white"),
+    // so lit objects like icons and text don't turn see-through. Colour stays premultiplied as-is: no brightening.
+    o = vec4(f, max(m, smoothstep(0.18, 0.5, m)));
+  } else {
+    o = vec4(c, 1.0);
+  }
+}`;
+
+function program(fsrc) {
+  const p = gl.createProgram();
+  for (const [type, src] of [[gl.VERTEX_SHADER, vs], [gl.FRAGMENT_SHADER, fsrc]]) {
+    const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+    gl.attachShader(p, s);
+  }
+  gl.bindAttribLocation(p, 0, 'p'); gl.linkProgram(p);
+  return p;
+}
+const prog = program(fs), hueProg = program(hueFs);
+gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+function texture(minFilter) {
+  const tx = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, tx);
+  for (const [k, val] of [[gl.TEXTURE_MIN_FILTER, minFilter], [gl.TEXTURE_MAG_FILTER, gl.LINEAR],
+                          [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]])
+    gl.texParameteri(gl.TEXTURE_2D, k, val);
+  return tx;
+}
+const videoTex = texture(gl.LINEAR), hueTex = texture(gl.LINEAR_MIPMAP_NEAREST), hueFbo = gl.createFramebuffer();
+let levels = 0;
+function allocHue(W, H) { // hue pyramid at video resolution, all mip levels
+  levels = Math.floor(Math.log2(Math.max(W, H)));
+  gl.bindTexture(gl.TEXTURE_2D, hueTex);
+  gl.texStorage2D(gl.TEXTURE_2D, levels + 1, floatRT ? gl.RGBA16F : gl.RGBA8, W, H);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, hueFbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, hueTex, 0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+}
+const U = (p, n) => gl.getUniformLocation(p, n);
+
+function draw() {
+  if (v.readyState < 2 || !levels) return;
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, videoTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, v);
+  gl.viewport(0, 0, c.width, c.height);
+  if (mode === 'green') {
+    gl.useProgram(hueProg);
+    gl.uniform1i(U(hueProg, 't'), 0);
+    gl.uniform3fv(U(hueProg, 'key'), keys.green);
+    gl.uniform2f(U(hueProg, 'px'), 1 / c.width, 1 / c.height);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, hueFbo);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, hueTex); gl.generateMipmap(gl.TEXTURE_2D);
+  }
+  gl.useProgram(prog);
+  gl.uniform1i(U(prog, 't'), 0); gl.uniform1i(U(prog, 'hue'), 1);
+  gl.uniform1f(U(prog, 'mode'), MODES.indexOf(mode));
+  gl.uniform1f(U(prog, 'levels'), levels);
+  gl.uniform3fv(U(prog, 'key'), keys[mode]);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+}
+// auto: re-measure the background a few times a second, because one video can switch between a green-screen part and
+// a black-background part (and between greens of different brightness)
+let auto = true, frames = 0;
+function frame() {
+  if (auto && frames++ % 6 === 0) autoKey();
+  draw();
+  v.requestVideoFrameCallback(frame);
+}
+function autoKey() { const [m, k] = detect(); keys[m] = k; mode = m; }
+function setMode(m) {
+  auto = m === 'auto';
+  if (auto) autoKey(); else mode = m;
+  post({ t: 'mode', v: m });
+  draw();
+}
+
+// Measure the background from the frame's border: real "green" is rarely 0,255,0 and compressed "black" is
+// rarely 0. The median ignores the subject where it touches an edge. Mostly-green border = green screen, else black.
+function detect() {
+  const W = 64, H = 36, s = document.createElement('canvas'); s.width = W; s.height = H;
+  const g = s.getContext('2d', { willReadFrequently: true }); g.drawImage(v, 0, 0, W, H);
+  const d = g.getImageData(0, 0, W, H).data, px = [];
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++)
+    if (x === 0 || y === 0 || x === W - 1 || y === H - 1) { const i = (y * W + x) * 4; px.push([d[i] / 255, d[i + 1] / 255, d[i + 2] / 255]); }
+  const median = arr => [0, 1, 2].map(ch => arr.map(p => p[ch]).sort((a, b) => a - b)[arr.length >> 1]);
+  const greens = px.filter(([r, gr, b]) => gr > 0.3 && gr > 1.4 * r && gr > 1.4 * b);
+  if (greens.length > px.length / 2) return ['green', median(greens)];
+  return ['black', median(px).map(x => Math.min(x, 0.1))]; // a bright border is not a black background: cap the black point
+}
+
+v.addEventListener('loadedmetadata', () => { c.width = v.videoWidth; c.height = v.videoHeight; allocHue(c.width, c.height); });
+v.addEventListener('loadeddata', () => { setMode('auto'); v.requestVideoFrameCallback(frame); }, { once: true });
+v.addEventListener('ended', () => post({ t: 'close' })); // plays once, then gets out of the way
+v.addEventListener('error',() => post({ t: 'error', v: 'Bu video açılamadı. MP4 (H.264) veya WebM kullan; ProRes .mov desteklenmiyor.' }));
+
+chrome.webview.addEventListener('message', e => {
+  const m = e.data;
+  if (m.t === 'mode') setMode(m.v);
+  else if (m.t === 'pause') v.paused ? v.play() : v.pause();
+  else if (m.t === 'mute') v.muted = !v.muted;
+});
+
+v.src = '/video';
+v.play().catch(() => { v.muted = true; v.play(); }); // sound blocked: play muted rather than not at all
+</script>

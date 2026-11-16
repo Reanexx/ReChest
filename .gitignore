@@ -1,0 +1,22 @@
+# build output
+bin/
+obj/
+setup/out/
+setup/bin/
+setup/obj/
+
+# IDE / user files
+*.user
+*.suo
+.vs/
+.vscode/
+.idea/
+
+# temp and leftovers (the app's data lives in %APPDATA%\ChestCounter, never here)
+*.tmp
+*.log
+*.rar
+*.zip
+setup/ChestCounterSetup.exe
+WebView2/
+EBWebView/

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ReChest map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400..900;1,400..900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<!-- The big map over Fortnite (MapFull.cs): the Map page on its own. The app sends the map state and your
+     position; route, layer and setting changes go back the same way as from the Map page. -->
+<body class="map-full">
+<main class="main" id="main"><div id="mapRoot"></div></main>
+<div class="mf-hint" id="mfHint">Press F5 or Esc to close</div>
+<script src="i18n.js"></script>
+<script src="map.js"></script>
+<script>
+  MapUI.mount(document.getElementById('mapRoot'));
+  const wv = window.chrome?.webview; // missing when the page is opened in a normal browser (design preview)
+  wv?.addEventListener('message', (e) => {
+    if (e.data?.type !== 'map') return;
+    MapUI.setChests(e.data.state);
+    const k = e.data.state?.routeFullKey, hint = document.getElementById('mfHint');
+    if (k >= 0x70 && k <= 0x87) hint.textContent = (window.T || ((t) => t))(`Press F${k - 0x6f} or Esc to close`);
+  });
+  addEventListener('keydown', (e) => { if (e.key === 'Escape') wv?.postMessage({ type: 'mapFullClose' }); });
+  // each open: the map grows in, centred on you
+  window.mfOpen = () => {
+    const m = document.getElementById('main');
+    m.classList.remove('mf-in'); void m.offsetWidth; m.classList.add('mf-in');
+    MapUI.centerOnMe();
+  };
+  wv?.postMessage({ type: 'ready' });
+</script>
+</body>
+</html>

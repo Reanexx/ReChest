@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms> <!-- only for the transparent video overlay window (VideoOverlay.cs) -->
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <AssemblyName>ChestCounter</AssemblyName>
+    <RootNamespace>ChestCounter</RootNamespace>
+    <Version>2.0.0</Version>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FortniteReplayReader" Version="3.1.1" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="ui\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="app.ico" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="overlay\player.html" CopyToOutputDirectory="PreserveNewest" />
+    <None Remove="overlay\*.mp4" />
+    <EmbeddedResource Include="overlay\1116.mp4" LogicalName="overlay.mp4" /> <!-- the broadcast video lives inside the exe -->
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- WinForms is used fully qualified; keep its namespaces out of the WPF code's global usings -->
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- the installer is its own project (setup\ReChestSetup.csproj, built by setup\build.ps1) -->
+    <Compile Remove="setup\**" />
+    <None Remove="setup\**" />
+    <EmbeddedResource Remove="setup\**" />
+    <Page Remove="setup\**" />
+  </ItemGroup>
+
+</Project>
+
