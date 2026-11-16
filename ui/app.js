@@ -551,7 +551,8 @@ function home() {
       : '<div class="empty">No players in this range</div>'}</section>`;
 
   return head('Overview', `${D.matches.length} matches read from your replays${D.backups.count ? ` · ${D.backups.count} backed up` : ''}`, tools)
-    + kpis + `<div class="dash">${chart}${side}</div>` + insights + featureRow() + table;
+    + kpis + `<div class="dash">${chart}${side}</div>` + insights + featureRow() + table
+    + '<div class="credit">Made by Reanex</div>';
 }
 
 const liveCard = () => `<section class="panel livecard rise" style="--i:7"><div class="ph"><h2>Live match</h2><span class="pill-live">Live</span></div>
